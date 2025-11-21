@@ -10,6 +10,58 @@
 > [!CAUTION]
 Exercise vigilance regarding copycat or coat-tailing sites that seek to exploit the project's popularity for potentially malicious purposes.
 
+## 2025-11-21
+
+### 🚀 Updated Scripts
+
+  - #### 🐞 Bug Fixes
+
+    - plex: prevent [] syntax issue [@MickLesk](https://github.com/MickLesk) ([#9318](https://github.com/community-scripts/ProxmoxVE/pull/9318))
+    - fix: karakeep strip "v" from release version [@CrazyWolf13](https://github.com/CrazyWolf13) ([#9324](https://github.com/community-scripts/ProxmoxVE/pull/9324))
+    - NetVisor: fix grep in update [@vhsdream](https://github.com/vhsdream) ([#9334](https://github.com/community-scripts/ProxmoxVE/pull/9334))
+    - Immich: pin correct version [@vhsdream](https://github.com/vhsdream) ([#9332](https://github.com/community-scripts/ProxmoxVE/pull/9332))
+
+  - #### 🔧 Refactor
+
+    - Refactor IPv6 disable logic and add 'disable' option [@MickLesk](https://github.com/MickLesk) ([#9326](https://github.com/community-scripts/ProxmoxVE/pull/9326))
+
+## 2025-11-20
+
+### 🚀 Updated Scripts
+
+  - #### 🐞 Bug Fixes
+
+    - core: change 'uv cache clear' to 'uv cache clean' [@MickLesk](https://github.com/MickLesk) ([#9299](https://github.com/community-scripts/ProxmoxVE/pull/9299))
+
+  - #### ✨ New Features
+
+    - Immich v2.3.1: OpenVINO tuning, OCR fixes, Maintenance mode, workflows/plugin framework [@vhsdream](https://github.com/vhsdream) ([#9310](https://github.com/community-scripts/ProxmoxVE/pull/9310))
+    - kasm: add: update [@CrazyWolf13](https://github.com/CrazyWolf13) ([#9253](https://github.com/community-scripts/ProxmoxVE/pull/9253))
+    - tools/pve: expand PVE support to 9.0–9.1 (post-install & netdata) [@MickLesk](https://github.com/MickLesk) ([#9298](https://github.com/community-scripts/ProxmoxVE/pull/9298))
+
+  - #### 💥 Breaking Changes
+
+    - Omada - AVX-only support [@MickLesk](https://github.com/MickLesk) ([#9295](https://github.com/community-scripts/ProxmoxVE/pull/9295))
+
+## 2025-11-19
+
+### 🚀 Updated Scripts
+
+  - #### 🐞 Bug Fixes
+
+    - HotFix: Fix NetVisor env var [@vhsdream](https://github.com/vhsdream) ([#9286](https://github.com/community-scripts/ProxmoxVE/pull/9286))
+    - Jotty: reduce RAM requirement [@vhsdream](https://github.com/vhsdream) ([#9272](https://github.com/community-scripts/ProxmoxVE/pull/9272))
+    - Nginx Proxy Manager: Pin version to v2.13.4 [@tremor021](https://github.com/tremor021) ([#9259](https://github.com/community-scripts/ProxmoxVE/pull/9259))
+
+  - #### ✨ New Features
+
+    - PVE 9.1 version support [@MickLesk](https://github.com/MickLesk) ([#9280](https://github.com/community-scripts/ProxmoxVE/pull/9280))
+    - force disable IPv6 if IPV6_METHOD = none [@MickLesk](https://github.com/MickLesk) ([#9277](https://github.com/community-scripts/ProxmoxVE/pull/9277))
+
+  - #### 💥 Breaking Changes
+
+    - NetVisor: v0.10.0 fixes [@vhsdream](https://github.com/vhsdream) ([#9255](https://github.com/community-scripts/ProxmoxVE/pull/9255))
+
 ## 2025-11-18
 
 ### 🚀 Updated Scripts
