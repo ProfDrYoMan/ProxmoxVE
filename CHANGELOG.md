@@ -10,6 +10,34 @@
 > [!CAUTION]
 Exercise vigilance regarding copycat or coat-tailing sites that seek to exploit the project's popularity for potentially malicious purposes.
 
+## 2025-11-23
+
+## 2025-11-22
+
+### 🆕 New Scripts
+
+  - Upgopher ([#9360](https://github.com/community-scripts/ProxmoxVE/pull/9360))
+
+### 🚀 Updated Scripts
+
+  - Expand support to Proxmox VE 9.1 in VM scripts [@MickLesk](https://github.com/MickLesk) ([#9351](https://github.com/community-scripts/ProxmoxVE/pull/9351))
+
+  - #### 🐞 Bug Fixes
+
+    - fix: Snipe-IT install and update failure due to new repository url [@ruanmed](https://github.com/ruanmed) ([#9362](https://github.com/community-scripts/ProxmoxVE/pull/9362))
+    - glpi - allow migration of existing databases [@moodyblue](https://github.com/moodyblue) ([#9353](https://github.com/community-scripts/ProxmoxVE/pull/9353))
+
+  - #### ✨ New Features
+
+    - Refactor cleanup steps to use cleanup_lxc function (install/ Folder) [@MickLesk](https://github.com/MickLesk) ([#9354](https://github.com/community-scripts/ProxmoxVE/pull/9354))
+    - Remove redundant cleanup steps from update scripts (ct/ Folder)  [@MickLesk](https://github.com/MickLesk) ([#9359](https://github.com/community-scripts/ProxmoxVE/pull/9359))
+
+### 🌐 Website
+
+  - #### ✨ New Features
+
+    - Refactor /data page [@BramSuurdje](https://github.com/BramSuurdje) ([#9343](https://github.com/community-scripts/ProxmoxVE/pull/9343))
+
 ## 2025-11-21
 
 ### 🚀 Updated Scripts
