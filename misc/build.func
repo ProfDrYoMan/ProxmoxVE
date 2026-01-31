@@ -160,17 +160,29 @@ maxkeys_check() {
 #
 # - Returns current container IP depending on OS type
 # - Debian/Ubuntu: uses `hostname -I`
-# - Alpine: parses eth0 via `ip -4 addr`
+# - Alpine: parses eth0 via `ip -4 addr` or `ip -6 addr`
+# - Supports IPv6-only environments as fallback
 # - Returns "Unknown" if OS type cannot be determined
 # ------------------------------------------------------------------------------
 get_current_ip() {
+  CURRENT_IP=""
   if [ -f /etc/os-release ]; then
     # Check for Debian/Ubuntu (uses hostname -I)
     if grep -qE 'ID=debian|ID=ubuntu' /etc/os-release; then
-      CURRENT_IP=$(hostname -I | awk '{print $1}')
+      # Try IPv4 first
+      CURRENT_IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+      # Fallback to IPv6 if no IPv4
+      if [[ -z "$CURRENT_IP" ]]; then
+        CURRENT_IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E ':' | head -n1)
+      fi
     # Check for Alpine (uses ip command)
     elif grep -q 'ID=alpine' /etc/os-release; then
-      CURRENT_IP=$(ip -4 addr show eth0 | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1)
+      # Try IPv4 first
+      CURRENT_IP=$(ip -4 addr show eth0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1)
+      # Fallback to IPv6 if no IPv4
+      if [[ -z "$CURRENT_IP" ]]; then
+        CURRENT_IP=$(ip -6 addr show eth0 scope global 2>/dev/null | awk '/inet6 / {print $2}' | cut -d/ -f1 | head -n 1)
+      fi
     else
       CURRENT_IP="Unknown"
     fi
@@ -183,9 +195,11 @@ get_current_ip() {
 #
 # - Updates /etc/motd with current container IP
 # - Removes old IP entries to avoid duplicates
+# - Regenerates /etc/profile.d/00_lxc-details.sh with dynamic OS/IP info
 # ------------------------------------------------------------------------------
 update_motd_ip() {
   MOTD_FILE="/etc/motd"
+  PROFILE_FILE="/etc/profile.d/00_lxc-details.sh"
 
   if [ -f "$MOTD_FILE" ]; then
     # Remove existing IP Address lines to prevent duplication
@@ -195,6 +209,26 @@ update_motd_ip() {
     # Add the new IP address
     echo -e "${TAB}${NETWORK}${YW} IP Address: ${GN}${IP}${CL}" >>"$MOTD_FILE"
   fi
+
+  # Update dynamic LXC details profile if values changed (e.g., after OS upgrade)
+  # Only update if file exists and is from community-scripts
+  if [ -f "$PROFILE_FILE" ] && grep -q "community-scripts" "$PROFILE_FILE" 2>/dev/null; then
+    # Get current values
+    local current_os="$(grep ^NAME /etc/os-release | cut -d= -f2 | tr -d '"') - Version: $(grep ^VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '"')"
+    local current_hostname="$(hostname)"
+    local current_ip="$(hostname -I | awk '{print $1}')"
+    
+    # Update only if values actually changed
+    if ! grep -q "OS:.*$current_os" "$PROFILE_FILE" 2>/dev/null; then
+      sed -i "s|OS:.*|OS: \${GN}$current_os\${CL}\\\"|" "$PROFILE_FILE"
+    fi
+    if ! grep -q "Hostname:.*$current_hostname" "$PROFILE_FILE" 2>/dev/null; then
+      sed -i "s|Hostname:.*|Hostname: \${GN}$current_hostname\${CL}\\\"|" "$PROFILE_FILE"
+    fi
+    if ! grep -q "IP Address:.*$current_ip" "$PROFILE_FILE" 2>/dev/null; then
+      sed -i "s|IP Address:.*|IP Address: \${GN}$current_ip\${CL}\\\"|" "$PROFILE_FILE"
+    fi
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -202,6 +236,7 @@ update_motd_ip() {
 #
 # - Installs SSH keys into container root account if SSH is enabled
 # - Uses pct push or direct input to authorized_keys
+# - Supports both SSH_KEYS_FILE (from advanced settings) and SSH_AUTHORIZED_KEY (from user defaults)
 # - Falls back to warning if no keys provided
 # ------------------------------------------------------------------------------
 install_ssh_keys_into_ct() {
@@ -209,6 +244,13 @@ install_ssh_keys_into_ct() {
 
   # Ensure SSH_KEYS_FILE is defined (may not be set if advanced_settings was skipped)
   : "${SSH_KEYS_FILE:=}"
+
+  # If SSH_KEYS_FILE doesn't exist but SSH_AUTHORIZED_KEY is set (from user defaults),
+  # create a temporary SSH_KEYS_FILE with the key
+  if [[ -z "$SSH_KEYS_FILE" || ! -s "$SSH_KEYS_FILE" ]] && [[ -n "${SSH_AUTHORIZED_KEY:-}" ]]; then
+    SSH_KEYS_FILE="$(mktemp)"
+    printf '%s\n' "$SSH_AUTHORIZED_KEY" >"$SSH_KEYS_FILE"
+  fi
 
   if [[ -n "$SSH_KEYS_FILE" && -s "$SSH_KEYS_FILE" ]]; then
     msg_info "Installing selected SSH keys into CT ${CTID}"
@@ -948,7 +990,7 @@ base_settings() {
   fi
 
   MTU=${var_mtu:-""}
-  SD=${var_storage:-""}
+  SD=${var_searchdomain:-""}
   NS=${var_ns:-""}
   MAC=${var_mac:-""}
   VLAN=${var_vlan:-""}
@@ -1113,6 +1155,10 @@ load_vars_file() {
             if [[ "$var_val" != "0" && "$var_val" != "1" ]]; then
               msg_warn "Invalid nesting value '$var_val' in $file (must be 0 or 1), ignoring"
               continue
+            fi
+            # Warn about potential issues with systemd-based OS when nesting is disabled via vars file
+            if [[ "$var_val" == "0" && "${var_os:-debian}" != "alpine" ]]; then
+              msg_warn "Nesting disabled in $file - modern systemd-based distributions may require nesting for proper operation"
             fi
             ;;
           var_keyctl)
@@ -1771,7 +1817,7 @@ advanced_settings() {
     if [[ -n "$BRIDGES" ]]; then
       while IFS= read -r bridge; do
         if [[ -n "$bridge" ]]; then
-          local description=$(grep -A 10 "iface $bridge" /etc/network/interfaces 2>/dev/null | grep '^#' | head -n1 | sed 's/^#\s*//')
+          local description=$(grep -A 10 "iface $bridge" /etc/network/interfaces 2>/dev/null | grep '^#' | head -n1 | sed 's/^#\s*//;s/^[- ]*//')
           BRIDGE_MENU_OPTIONS+=("$bridge" "${description:- }")
         fi
       done <<<"$BRIDGES"
@@ -2003,6 +2049,10 @@ advanced_settings() {
           "${BRIDGE_MENU_OPTIONS[@]}" \
           3>&1 1>&2 2>&3); then
           local bridge_test="${result:-vmbr0}"
+          # Skip separator entries (e.g., __other__) - re-display menu
+          if [[ "$bridge_test" == "__other__" || "$bridge_test" == -* ]]; then
+            continue
+          fi
           if validate_bridge "$bridge_test"; then
             _bridge="$bridge_test"
             ((STEP++))
@@ -2374,6 +2424,12 @@ advanced_settings() {
       else
         if [ $? -eq 1 ]; then
           _enable_nesting="0"
+          # Warn about potential issues with systemd-based OS when nesting is disabled
+          if [[ "$var_os" != "alpine" ]]; then
+            whiptail --backtitle "Proxmox VE Helper Scripts" \
+              --title "⚠️ NESTING WARNING" \
+              --msgbox "Modern systemd-based distributions (Debian 13+, Ubuntu 24.04+, etc.) may require nesting to be enabled for proper operation.\n\nWithout nesting, the container may start in a degraded state with failing services (error 243/CREDENTIALS).\n\nIf you experience issues, enable nesting in the container options." 14 68
+          fi
         else
           ((STEP--))
           continue
@@ -3280,6 +3336,7 @@ start() {
     set_std_mode
     ensure_profile_loaded
     update_script
+    update_motd_ip
     cleanup_lxc
   else
     CHOICE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "${APP} LXC Update/Setting" --menu \
@@ -3306,6 +3363,7 @@ start() {
     esac
     ensure_profile_loaded
     update_script
+    update_motd_ip
     cleanup_lxc
   fi
 }
@@ -3442,8 +3500,13 @@ build_container() {
   export DEV_MODE_DRYRUN="${DEV_MODE_DRYRUN:-false}"
 
   # Build PCT_OPTIONS as multi-line string
-  PCT_OPTIONS_STRING="  -hostname $HN
+  PCT_OPTIONS_STRING="  -hostname $HN"
+
+  # Only add -tags if TAGS is not empty
+  if [ -n "$TAGS" ]; then
+    PCT_OPTIONS_STRING="$PCT_OPTIONS_STRING
   -tags $TAGS"
+  fi
 
   # Only add -features if FEATURES is not empty
   if [ -n "$FEATURES" ]; then
@@ -3818,6 +3881,17 @@ EOF
   }
 
   fix_gpu_gids
+
+  # Fix Debian 13 LXC template bug where / is owned by nobody:nogroup
+  # This must be done from the host as unprivileged containers cannot chown /
+  local rootfs
+  rootfs=$(pct config "$CTID" | grep -E '^rootfs:' | sed 's/rootfs: //' | cut -d',' -f1)
+  if [[ -n "$rootfs" ]]; then
+    local mount_point="/var/lib/lxc/${CTID}/rootfs"
+    if [[ -d "$mount_point" ]] && [[ "$(stat -c '%U' "$mount_point")" != "root" ]]; then
+      chown root:root "$mount_point" 2>/dev/null || true
+    fi
+  fi
 
   # Continue with standard container setup
   msg_info "Customizing LXC Container"
@@ -4473,37 +4547,42 @@ create_lxc_container() {
 
   msg_info "Searching for template '$TEMPLATE_SEARCH'"
 
+  # Initialize variables
+  ONLINE_TEMPLATE=""
+  ONLINE_TEMPLATES=()
+
+  # Step 1: Check local templates first (instant)
   mapfile -t LOCAL_TEMPLATES < <(
     pveam list "$TEMPLATE_STORAGE" 2>/dev/null |
       awk -v search="${TEMPLATE_SEARCH}" -v pattern="${TEMPLATE_PATTERN}" '$1 ~ search && $1 ~ pattern {print $1}' |
       sed 's|.*/||' | sort -t - -k 2 -V
   )
 
-  pveam update >/dev/null 2>&1 || msg_warn "Could not update template catalog (pveam update failed)."
-
-  msg_ok "Template search completed"
-
-  set +u
-  mapfile -t ONLINE_TEMPLATES < <(pveam available -section system 2>/dev/null | grep -E '\.(tar\.zst|tar\.xz|tar\.gz)$' | awk '{print $2}' | grep -E "^${TEMPLATE_SEARCH}.*${TEMPLATE_PATTERN}" | sort -t - -k 2 -V 2>/dev/null || true)
-  set -u
-
-  ONLINE_TEMPLATE=""
-  [[ ${#ONLINE_TEMPLATES[@]} -gt 0 ]] && ONLINE_TEMPLATE="${ONLINE_TEMPLATES[-1]}"
-
-  if [[ ${#ONLINE_TEMPLATES[@]} -gt 0 ]]; then
-    count=0
-    for idx in "${!ONLINE_TEMPLATES[@]}"; do
-      ((count++))
-      [[ $count -ge 3 ]] && break
-    done
-  fi
-
+  # Step 2: If local template found, use it immediately (skip pveam update)
   if [[ ${#LOCAL_TEMPLATES[@]} -gt 0 ]]; then
     TEMPLATE="${LOCAL_TEMPLATES[-1]}"
     TEMPLATE_SOURCE="local"
+    msg_ok "Template search completed"
   else
+    # Step 3: No local template - need to check online (this may be slow)
+    msg_info "No local template found, checking online catalog..."
+
+    # Update catalog with timeout to prevent long hangs
+    if command -v timeout &>/dev/null; then
+      if ! timeout 30 pveam update >/dev/null 2>&1; then
+        msg_warn "Template catalog update timed out (possible network/DNS issue). Run 'pveam update' manually to diagnose."
+      fi
+    else
+      pveam update >/dev/null 2>&1 || msg_warn "Could not update template catalog (pveam update failed)"
+    fi
+
+    ONLINE_TEMPLATES=()
+    mapfile -t ONLINE_TEMPLATES < <(pveam available -section system 2>/dev/null | grep -E '\.(tar\.zst|tar\.xz|tar\.gz)$' | awk '{print $2}' | grep -E "^${TEMPLATE_SEARCH}.*${TEMPLATE_PATTERN}" | sort -t - -k 2 -V 2>/dev/null || true)
+    [[ ${#ONLINE_TEMPLATES[@]} -gt 0 ]] && ONLINE_TEMPLATE="${ONLINE_TEMPLATES[-1]}"
+
     TEMPLATE="$ONLINE_TEMPLATE"
     TEMPLATE_SOURCE="online"
+    msg_ok "Template search completed"
   fi
 
   # If still no template, try to find alternatives
@@ -4512,6 +4591,7 @@ create_lxc_container() {
     echo "[DEBUG] No template found for ${PCT_OSTYPE} ${PCT_OSVERSION}, searching for alternatives..."
 
     # Get all available versions for this OS type
+    AVAILABLE_VERSIONS=()
     mapfile -t AVAILABLE_VERSIONS < <(
       pveam available -section system 2>/dev/null |
         grep -E '\.(tar\.zst|tar\.xz|tar\.gz)$' |
@@ -4534,6 +4614,7 @@ create_lxc_container() {
         PCT_OSVERSION="${AVAILABLE_VERSIONS[$((choice - 1))]}"
         TEMPLATE_SEARCH="${PCT_OSTYPE}-${PCT_OSVERSION}"
 
+        ONLINE_TEMPLATES=()
         mapfile -t ONLINE_TEMPLATES < <(
           pveam available -section system 2>/dev/null |
             grep -E '\.(tar\.zst|tar\.xz|tar\.gz)$' |

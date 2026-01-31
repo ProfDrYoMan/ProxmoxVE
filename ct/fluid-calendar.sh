@@ -6,12 +6,12 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Source: https://fluidcalendar.com
 
 APP="fluid-calendar"
-var_tags="${var_tags:-calendar,tasks}"
+var_tags="${var_tags:-calendar;tasks}"
 var_cpu="${var_cpu:-3}"
 var_ram="${var_ram:-4096}"
 var_disk="${var_disk:-7}"
 var_os="${var_os:-debian}"
-var_version="${var_version:-12}"
+var_version="${var_version:-13}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"

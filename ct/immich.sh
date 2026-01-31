@@ -9,7 +9,7 @@ APP="immich"
 var_tags="${var_tags:-photos}"
 var_disk="${var_disk:-20}"
 var_cpu="${var_cpu:-4}"
-var_ram="${var_ram:-4096}"
+var_ram="${var_ram:-6144}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
 var_unprivileged="${var_unprivileged:-1}"
@@ -68,7 +68,7 @@ EOF
   if [[ ! -f /etc/apt/sources.list.d/mise.list ]]; then
     msg_info "Installing Mise"
     curl -fSs https://mise.jdx.dev/gpg-key.pub | tee /etc/apt/keyrings/mise-archive-keyring.pub 1>/dev/null
-    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.pub arch=amd64] https://mise.jdx.dev/deb stable main" | tee /etc/apt/sources.list.d/mise.list
+    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.pub arch=amd64] https://mise.jdx.dev/deb stable main" >/etc/apt/sources.list.d/mise.list
     $STD apt update
     $STD apt install -y mise
     msg_ok "Installed Mise"
@@ -112,8 +112,16 @@ EOF
     msg_ok "Image-processing libraries up to date"
   fi
 
-  RELEASE="2.4.1"
+  RELEASE="2.5.2"
   if check_for_gh_release "immich" "immich-app/immich" "${RELEASE}"; then
+    if [[ $(cat ~/.immich) > "2.5.1" ]]; then
+      msg_info "Enabling Maintenance Mode"
+      cd /opt/immich/app/bin
+      $STD bash ./immich-admin enable-maintenance-mode
+      export MAINT_MODE=1
+      $STD cd -
+      msg_ok "Enabled Maintenance Mode"
+    fi
     msg_info "Stopping Services"
     systemctl stop immich-web
     systemctl stop immich-ml
@@ -167,7 +175,7 @@ EOF
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "immich" "immich-app/immich" "tarball" "v${RELEASE}" "$SRC_DIR"
 
-    msg_info "Updating ${APP} web and microservices"
+    msg_info "Updating Immich web and microservices"
     cd "$SRC_DIR"/server
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
     export CI=1
@@ -209,7 +217,7 @@ EOF
     mkdir -p "$PLUGIN_DIR"
     cp -r ./dist "$PLUGIN_DIR"/dist
     cp ./manifest.json "$PLUGIN_DIR"
-    msg_ok "Updated ${APP} server, web, cli and plugins"
+    msg_ok "Updated Immich server, web, cli and plugins"
 
     cd "$SRC_DIR"/machine-learning
     mkdir -p "$ML_DIR" && chown -R immich:immich "$ML_DIR"
@@ -217,12 +225,13 @@ EOF
     export VIRTUAL_ENV="${ML_DIR}"/ml-venv
     if [[ -f ~/.openvino ]]; then
       msg_info "Updating HW-accelerated machine-learning"
-      $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv sync --extra openvino --active -n -p python3.11 --managed-python
-      patchelf --clear-execstack "${VIRTUAL_ENV}/lib/python3.11/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.cpython-311-x86_64-linux-gnu.so"
+      $STD uv add --no-sync --optional openvino onnxruntime-openvino==1.20.0 --active -n -p python3.12 --managed-python
+      $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv sync --extra openvino --no-dev --active --link-mode copy -n -p python3.12 --managed-python
+      patchelf --clear-execstack "${VIRTUAL_ENV}/lib/python3.12/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.cpython-312-x86_64-linux-gnu.so"
       msg_ok "Updated HW-accelerated machine-learning"
     else
       msg_info "Updating machine-learning"
-      $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv sync --extra cpu --active -n -p python3.11 --managed-python
+      $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv sync --extra cpu --no-dev --active --link-mode copy -n -p python3.11 --managed-python
       msg_ok "Updated machine-learning"
     fi
     cd "$SRC_DIR"
@@ -241,8 +250,16 @@ EOF
     ln -s "$GEO_DIR" "$APP_DIR"
 
     chown -R immich:immich "$INSTALL_DIR"
-    msg_ok "Updated ${APP} to v${RELEASE}"
+    if [[ "${MAINT_MODE:-0}" == 1 ]]; then
+      msg_info "Disabling Maintenance Mode"
+      cd /opt/immich/app/bin
+      $STD bash ./immich-admin disable-maintenance-mode
+      unset MAINT_MODE
+      $STD cd -
+      msg_ok "Disabled Maintenance Mode"
+    fi
     systemctl restart immich-ml immich-web
+    msg_ok "Updated successfully!"
   fi
   exit
 }
@@ -337,7 +354,7 @@ function compile_libraw() {
     cd "$SOURCE"
     $STD git reset --hard "$LIBRAW_REVISION"
     $STD autoreconf --install
-    $STD ./configure
+    $STD ./configure --disable-examples
     $STD make -j"$(nproc)"
     $STD make install
     ldconfig /usr/local/lib
