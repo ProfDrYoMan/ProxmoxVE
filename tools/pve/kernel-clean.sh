@@ -24,7 +24,7 @@ CL="\033[m"
 
 # Telemetry
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
-declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "kernel-clean" "tool"
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "kernel-clean" "pve"
 
 # Detect current kernel
 current_kernel=$(uname -r)
@@ -57,7 +57,7 @@ done
 
 if [ ${#kernels_to_remove[@]} -eq 0 ]; then
   echo -e "${RD}No valid selection made. Exiting.${CL}"
-  exit 1
+  exit 0
 fi
 
 # Confirm removal
@@ -66,7 +66,7 @@ printf "%s\n" "${kernels_to_remove[@]}"
 read -rp "Proceed with removal? (y/n): " confirm
 if [[ "$confirm" != "y" ]]; then
   echo -e "${RD}Aborted.${CL}"
-  exit 1
+  exit 0
 fi
 
 # Remove kernels

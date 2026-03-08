@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: vhsdream
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://fluidcalendar.com
+# Source: https://github.com/dotnetfactory/fluid-calendar
 
 APP="fluid-calendar"
 var_tags="${var_tags:-calendar;tasks}"
@@ -28,6 +28,10 @@ function update_script() {
     msg_error "No ${APP} Installation Found!"
     exit
   fi
+
+  ensure_dependencies build-essential
+  NODE_VERSION="24" setup_nodejs
+
   if check_for_gh_release "fluid-calendar" "dotnetfactory/fluid-calendar"; then
     msg_info "Stopping Service"
     systemctl stop fluid-calendar
@@ -45,7 +49,7 @@ function update_script() {
     $STD npx prisma migrate deploy
     $STD npm run build:os
     msg_ok "Updated Fluid Calendar"
-    
+
     msg_info "Starting Service"
     systemctl start fluid-calendar
     msg_ok "Started Service"

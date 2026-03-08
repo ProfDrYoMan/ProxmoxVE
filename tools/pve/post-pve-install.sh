@@ -46,7 +46,7 @@ msg_error() {
 
 # Telemetry
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
-declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "post-pve-install" "tool"
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "post-pve-install" "pve"
 
 get_pve_version() {
   local pve_ver
@@ -88,19 +88,19 @@ main() {
   if [[ "$PVE_MAJOR" == "8" ]]; then
     if ((PVE_MINOR < 0 || PVE_MINOR > 9)); then
       msg_error "Unsupported Proxmox 8 version"
-      exit 1
+      exit 105
     fi
     start_routines_8
   elif [[ "$PVE_MAJOR" == "9" ]]; then
     if ((PVE_MINOR < 0 || PVE_MINOR > 1)); then
       msg_error "Only Proxmox 9.0-9.1.x is currently supported"
-      exit 1
+      exit 105
     fi
     start_routines_9
   else
     msg_error "Unsupported Proxmox VE major version: $PVE_MAJOR"
     echo -e "Supported: 8.0–8.9.x and 9.0–9.1.x"
-    exit 1
+    exit 105
   fi
 }
 

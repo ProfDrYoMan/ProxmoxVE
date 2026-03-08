@@ -21,7 +21,7 @@ CL="\033[m"
 
 # Telemetry
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
-declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "fstrim" "tool"
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "fstrim" "pve"
 
 LOGFILE="/var/log/fstrim.log"
 touch "$LOGFILE"
@@ -39,7 +39,7 @@ ROOT_FS=$(df -Th "/" | awk 'NR==2 {print $2}')
 if [ "$ROOT_FS" != "ext4" ]; then
   whiptail --backtitle "Proxmox VE Helper Scripts" \
     --title "Warning" \
-    --yesno "Root filesystem is not ext4 ($ROOT_FS).\nContinue anyway?" 12 80 || exit 1
+    --yesno "Root filesystem is not ext4 ($ROOT_FS).\nContinue anyway?" 12 80 || exit 0
 fi
 
 NODE=$(hostname)

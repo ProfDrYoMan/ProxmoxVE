@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: kristocopani
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://semaphoreui.com/
+# Source: https://semaphoreui.com/ | Github: https://github.com/semaphoreui/semaphore
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -30,11 +30,12 @@ SEM_KEY=$(openssl rand -base64 32)
 SEM_PW=$(openssl rand -base64 12)
 cat <<EOF >/opt/semaphore/config.json
 {
-  "bolt": {
-    "host": "/opt/semaphore/semaphore_db.bolt"
+  "sqlite": {
+    "host": "/opt/semaphore/database.sqlite"
   },
+  "dialect": "sqlite",
   "tmp_path": "/opt/semaphore/tmp",
-  "cookie_hash": "${SEM_HASH}",
+  "cookie_hash": "${SEM_HASH}", 
   "cookie_encryption": "${SEM_ENCRYPTION}",
   "access_key_encryption": "${SEM_KEY}"
 }

@@ -35,7 +35,7 @@ EOF
 
 # Telemetry
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
-declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "nic-offloading-fix" "tool"
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "nic-offloading-fix" "pve"
 
 header_info
 
@@ -47,7 +47,7 @@ function msg_warn() { echo -e "${WARN} ${YWB}${1}"; }
 # Check for root privileges
 if [ "$(id -u)" -ne 0 ]; then
   msg_error "Error: This script must be run as root."
-  exit 1
+  exit 104
 fi
 
 if ! command -v ethtool >/dev/null 2>&1; then
@@ -55,7 +55,7 @@ if ! command -v ethtool >/dev/null 2>&1; then
   apt-get update &>/dev/null
   apt-get install -y ethtool &>/dev/null || {
     msg_error "Failed to install ethtool. Exiting."
-    exit 1
+    exit 237
   }
   msg_ok "ethtool installed successfully"
 fi
@@ -86,7 +86,7 @@ done
 if [ ${#INTERFACES[@]} -eq 0 ]; then
   whiptail --title "Error" --msgbox "No Intel e1000e or e1000 network interfaces found!" 10 60
   msg_error "No Intel e1000e or e1000 network interfaces found! Exiting."
-  exit 1
+  exit 236
 fi
 
 msg_ok "Found ${BL}$COUNT${GN} Intel e1000e/e1000 interfaces"

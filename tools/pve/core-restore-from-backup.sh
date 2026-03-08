@@ -46,7 +46,7 @@ header_info
 
 # Telemetry
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
-declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "core-restore" "tool"
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "core-restore" "pve"
 
 function msg_info() {
   local msg="$1"
@@ -62,7 +62,7 @@ function msg_error() {
 }
 if [ -z "$(ls -A /root/.homeassistant/backups/)" ]; then
   msg_error "No backups found! \n"
-  exit 1
+  exit 235
 fi
 DIR=/root/.homeassistant/restore
 if [ -d "$DIR" ]; then
