@@ -145,7 +145,7 @@ EOF
     cp -r /opt/termix/uploads /opt/termix_uploads_backup
     msg_ok "Backed up Data"
 
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "termix" "Termix-SSH/Termix"
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "termix" "Termix-SSH/Termix" "tarball"
 
     msg_info "Recreating Directories"
     mkdir -p /opt/termix/html \
@@ -154,6 +154,8 @@ EOF
       /opt/termix/nginx/cache \
       /opt/termix/nginx/client_body
     msg_ok "Recreated Directories"
+
+    NODE_VERSION="24" setup_nodejs
 
     msg_info "Building Frontend"
     cd /opt/termix

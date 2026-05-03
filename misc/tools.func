@@ -1139,39 +1139,42 @@ validate_github_token() {
     -H "Authorization: Bearer $token" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "https://api.github.com/user" 2>/dev/null) || { rm -f "$headers"; return 3; }
+    "https://api.github.com/user" 2>/dev/null) || {
+    rm -f "$headers"
+    return 3
+  }
   http_code="$response"
 
   # Read expiry header (fine-grained PATs carry this)
-  expiry_date=$(grep -i '^github-authentication-token-expiration:' "$headers" \
-    | sed 's/.*: *//' | tr -d '\r\n' || true)
+  expiry_date=$(grep -i '^github-authentication-token-expiration:' "$headers" |
+    sed 's/.*: *//' | tr -d '\r\n' || true)
   # Read token scopes (classic PATs)
-  scopes=$(grep -i '^x-oauth-scopes:' "$headers" \
-    | sed 's/.*: *//' | tr -d '\r\n' || true)
+  scopes=$(grep -i '^x-oauth-scopes:' "$headers" |
+    sed 's/.*: *//' | tr -d '\r\n' || true)
   rm -f "$headers"
 
   case "$http_code" in
-    200)
-      if [[ -n "$expiry_date" ]]; then
-        msg_ok "GitHub token is valid (expires: $expiry_date)."
-      else
-        msg_ok "GitHub token is valid (no expiry / fine-grained PAT)."
-      fi
-      # Warn if classic PAT has no public_repo scope
-      if [[ -n "$scopes" && "$scopes" != *"public_repo"* && "$scopes" != *"repo"* ]]; then
-        msg_warn "Token has no 'public_repo' scope - private repos and some release APIs may fail."
-        return 2
-      fi
-      return 0
-      ;;
-    401)
-      msg_error "GitHub token is invalid or expired (HTTP 401)."
-      return 1
-      ;;
-    *)
-      msg_warn "GitHub token validation returned HTTP $http_code - treating as valid."
-      return 0
-      ;;
+  200)
+    if [[ -n "$expiry_date" ]]; then
+      msg_ok "GitHub token is valid (expires: $expiry_date)."
+    else
+      msg_ok "GitHub token is valid (no expiry / fine-grained PAT)."
+    fi
+    # Warn if classic PAT has no public_repo scope
+    if [[ -n "$scopes" && "$scopes" != *"public_repo"* && "$scopes" != *"repo"* ]]; then
+      msg_warn "Token has no 'public_repo' scope - private repos and some release APIs may fail."
+      return 2
+    fi
+    return 0
+    ;;
+  401)
+    msg_error "GitHub token is invalid or expired (HTTP 401)."
+    return 1
+    ;;
+  *)
+    msg_warn "GitHub token validation returned HTTP $http_code - treating as valid."
+    return 0
+    ;;
   esac
 }
 
@@ -1921,8 +1924,8 @@ setup_deb822_repo() {
     echo "Types: deb"
     echo "URIs: $repo_url"
     echo "Suites: $suite"
-    # Flat repositories (suite="./" or absolute path) must not have Components
-    if [[ "$suite" != "./" && -n "$component" ]]; then
+    # Flat repositories (suite ending with "/" or "./") must not have Components
+    if [[ "$suite" != *"/" && -n "$component" ]]; then
       echo "Components: $component"
     fi
     [[ -n "$architectures" ]] && echo "Architectures: $architectures"
@@ -4008,9 +4011,14 @@ function setup_ffmpeg() {
     DEPS+=(
       libx264-dev libx265-dev libvpx-dev libmp3lame-dev
       libfreetype6-dev libass-dev libopus-dev libvorbis-dev
-      libdav1d-dev libsvtav1-dev zlib1g-dev libnuma-dev
+      libdav1d-dev zlib1g-dev libnuma-dev
       libva-dev libdrm-dev
     )
+    if apt-cache show libsvtav1enc-dev &>/dev/null; then
+      DEPS+=(libsvtav1enc-dev)
+    elif apt-cache show libsvtav1-dev &>/dev/null; then
+      DEPS+=(libsvtav1-dev)
+    fi
     ;;
   *)
     msg_error "Invalid FFMPEG_TYPE: $TYPE"
@@ -4605,6 +4613,23 @@ function setup_hwaccel() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Resolve the IGC tag that the latest compute-runtime was built against.
+# Must be called AFTER a fetch_and_deploy_gh_release for intel/compute-runtime
+# so that /tmp/gh_rel.json contains the compute-runtime release metadata.
+# Sets the variable named by $1 (default: igc_tag) to the discovered tag.
+# ══════════════════════════════════════════════════════════════════════════════
+_resolve_igc_tag() {
+  local -n _out_ref="${1:-igc_tag}"
+  _out_ref="latest"
+  if [[ -f /tmp/gh_rel.json ]]; then
+    local _body _parsed
+    _body=$(jq -r '.body // empty' /tmp/gh_rel.json 2>/dev/null) || return 0
+    _parsed=$(grep -oP 'intel-graphics-compiler/releases/tag/\K[^\s\)]+' <<<"$_body" | head -1)
+    [[ -n "$_parsed" ]] && _out_ref="$_parsed"
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Intel Arc GPU Setup
 # ══════════════════════════════════════════════════════════════════════════════
 _setup_intel_arc() {
@@ -4630,12 +4655,17 @@ _setup_intel_arc() {
     if [[ "$os_codename" == "trixie" || "$os_codename" == "sid" ]]; then
       msg_info "Fetching Intel compute-runtime from GitHub for Arc support"
 
+      # Fetch a compute-runtime package first so /tmp/gh_rel.json is populated,
+      # then resolve the matching IGC tag from the release notes.
       # libigdgmm - bundled in compute-runtime releases
       fetch_and_deploy_gh_release "libigdgmm12" "intel/compute-runtime" "binary" "latest" "" "libigdgmm12_*_amd64.deb" || true
 
-      # Intel Graphics Compiler (note: packages have -2 suffix)
-      fetch_and_deploy_gh_release "intel-igc-core" "intel/intel-graphics-compiler" "binary" "latest" "" "intel-igc-core-2_*_amd64.deb" || true
-      fetch_and_deploy_gh_release "intel-igc-opencl" "intel/intel-graphics-compiler" "binary" "latest" "" "intel-igc-opencl-2_*_amd64.deb" || true
+      local igc_tag
+      _resolve_igc_tag igc_tag
+
+      # Intel Graphics Compiler – pinned to the version compute-runtime expects
+      fetch_and_deploy_gh_release "intel-igc-core" "intel/intel-graphics-compiler" "binary" "$igc_tag" "" "intel-igc-core-2_*_amd64.deb" || true
+      fetch_and_deploy_gh_release "intel-igc-opencl" "intel/intel-graphics-compiler" "binary" "$igc_tag" "" "intel-igc-opencl-2_*_amd64.deb" || true
 
       # Compute Runtime (depends on IGC and gmmlib)
       fetch_and_deploy_gh_release "intel-opencl-icd" "intel/compute-runtime" "binary" "latest" "" "intel-opencl-icd_*_amd64.deb" || true
@@ -4685,12 +4715,17 @@ _setup_intel_modern() {
     if [[ "$os_codename" == "trixie" || "$os_codename" == "sid" ]]; then
       msg_info "Fetching Intel compute-runtime from GitHub"
 
+      # Fetch a compute-runtime package first so /tmp/gh_rel.json is populated,
+      # then resolve the matching IGC tag from the release notes.
       # libigdgmm first (bundled in compute-runtime releases)
       fetch_and_deploy_gh_release "libigdgmm12" "intel/compute-runtime" "binary" "latest" "" "libigdgmm12_*_amd64.deb" || true
 
-      # Intel Graphics Compiler (note: packages have -2 suffix)
-      fetch_and_deploy_gh_release "intel-igc-core" "intel/intel-graphics-compiler" "binary" "latest" "" "intel-igc-core-2_*_amd64.deb" || true
-      fetch_and_deploy_gh_release "intel-igc-opencl" "intel/intel-graphics-compiler" "binary" "latest" "" "intel-igc-opencl-2_*_amd64.deb" || true
+      local igc_tag
+      _resolve_igc_tag igc_tag
+
+      # Intel Graphics Compiler – pinned to the version compute-runtime expects
+      fetch_and_deploy_gh_release "intel-igc-core" "intel/intel-graphics-compiler" "binary" "$igc_tag" "" "intel-igc-core-2_*_amd64.deb" || true
+      fetch_and_deploy_gh_release "intel-igc-opencl" "intel/intel-graphics-compiler" "binary" "$igc_tag" "" "intel-igc-opencl-2_*_amd64.deb" || true
 
       # Compute Runtime
       fetch_and_deploy_gh_release "intel-opencl-icd" "intel/compute-runtime" "binary" "latest" "" "intel-opencl-icd_*_amd64.deb" || true
@@ -5929,14 +5964,14 @@ function setup_mariadb_db() {
 }
 
 # ------------------------------------------------------------------------------
-# Installs or updates MongoDB to specified major version.
+# Installs or updates MongoDB to specified version.
 #
 # Description:
 #   - Preserves data across installations
 #   - Adds official MongoDB repo
 #
 # Variables:
-#   MONGO_VERSION  - MongoDB major version to install (e.g. 7.0, 8.0)
+#   MONGO_VERSION  - MongoDB version to install (e.g. 7.0, 8.2)
 # ------------------------------------------------------------------------------
 
 function setup_mongodb() {
@@ -6009,8 +6044,11 @@ function setup_mongodb() {
   }
 
   # Setup repository
+  # MongoDB 8.x versions beyond 8.0 reuse the server-8.0.asc PGP key
+  local MONGO_KEY_VERSION="${MONGO_VERSION}"
+  [[ "${MONGO_VERSION}" == 8.[1-9]* ]] && MONGO_KEY_VERSION="8.0"
   manage_tool_repository "mongodb" "$MONGO_VERSION" "$MONGO_BASE_URL" \
-    "https://www.mongodb.org/static/pgp/server-${MONGO_VERSION}.asc" || {
+    "https://www.mongodb.org/static/pgp/server-${MONGO_KEY_VERSION}.asc" || {
     msg_error "Failed to setup MongoDB repository"
     return 100
   }
@@ -6306,11 +6344,14 @@ function setup_nodejs() {
     }
   fi
 
-  # Scenario 1: Already installed at target version - just update packages/modules
+  # Scenario 1: Already installed at target version - upgrade to latest minor/patch + update packages/modules
   if [[ -n "$CURRENT_NODE_VERSION" && "$CURRENT_NODE_VERSION" == "$NODE_VERSION" ]]; then
     msg_info "Update Node.js $NODE_VERSION"
 
     ensure_apt_working || return 100
+
+    # Upgrade to the latest minor/patch release from NodeSource
+    $STD apt-get install -y --only-upgrade nodejs 2>/dev/null || true
 
     # Pin npm to 11.11.0 to work around Node.js 22.22.2 regression (nodejs/node#62425)
     $STD npm install -g npm@11.11.0 2>/dev/null || true
@@ -6390,7 +6431,37 @@ function setup_nodejs() {
     msg_ok "Setup Node.js $NODE_VERSION"
   fi
 
-  export NODE_OPTIONS="--max-old-space-size=4096"
+  # Set a safe default heap limit for Node.js builds if not explicitly provided.
+  # Priority:
+  #   1) NODE_OPTIONS (caller/user override)
+  #   2) NODE_MAX_OLD_SPACE_SIZE (explicit MB override)
+  #   3) var_ram (LXC memory setting, MB)
+  #   4) /proc/meminfo (runtime memory detection)
+  # Auto value is clamped to 1024..12288 MB.
+  if [[ -z "${NODE_OPTIONS:-}" ]]; then
+    local node_heap_mb=""
+
+    if [[ -n "${NODE_MAX_OLD_SPACE_SIZE:-}" ]] && [[ "${NODE_MAX_OLD_SPACE_SIZE}" =~ ^[0-9]+$ ]]; then
+      node_heap_mb="${NODE_MAX_OLD_SPACE_SIZE}"
+    elif [[ -n "${var_ram:-}" ]] && [[ "${var_ram}" =~ ^[0-9]+$ ]]; then
+      node_heap_mb=$((var_ram * 75 / 100))
+    else
+      local total_mem_kb=""
+      total_mem_kb=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo "")
+      if [[ "$total_mem_kb" =~ ^[0-9]+$ ]]; then
+        local total_mem_mb=$((total_mem_kb / 1024))
+        node_heap_mb=$((total_mem_mb * 75 / 100))
+      fi
+    fi
+
+    if [[ -z "$node_heap_mb" ]] || ((node_heap_mb < 1024)); then
+      node_heap_mb=1024
+    elif ((node_heap_mb > 12288)); then
+      node_heap_mb=12288
+    fi
+
+    export NODE_OPTIONS="--max-old-space-size=${node_heap_mb}"
+  fi
 
   # Ensure valid working directory for npm (avoids uv_cwd error)
   if [[ ! -d /opt ]]; then
