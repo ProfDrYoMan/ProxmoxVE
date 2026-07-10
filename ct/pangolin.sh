@@ -6,12 +6,14 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Source: https://pangolin.net/ | Github: https://github.com/fosrl/pangolin
 
 APP="Pangolin"
+PANGOLIN_VERSION="${PANGOLIN_VERSION:-1.18.4}"
 var_tags="${var_tags:-proxy}"
 var_cpu="${var_cpu:-2}"
 var_ram="${var_ram:-4096}"
 var_disk="${var_disk:-10}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_tun="${var_tun:-1}"
 
@@ -33,7 +35,7 @@ function update_script() {
 
   NODE_VERSION="24" setup_nodejs
 
-  if check_for_gh_release "pangolin" "fosrl/pangolin"; then
+  if check_for_gh_release "pangolin" "fosrl/pangolin" "$PANGOLIN_VERSION" "Pinned to a tested release because Pangolin's schema changes have repeatedly broken unattended updates. To try a newer version at your own risk, run: 'export PANGOLIN_VERSION=<tag>' and re-run update. If it breaks, please open an issue at https://github.com/community-scripts/ProxmoxVE/issues with the error log."; then
     msg_info "Stopping Service"
     systemctl stop pangolin
     systemctl stop gerbil
@@ -41,10 +43,14 @@ function update_script() {
 
     msg_info "Creating backup"
     tar -czf /opt/pangolin_config_backup.tar.gz -C /opt/pangolin config
+    if [[ -f /opt/pangolin/config/db/db.sqlite ]]; then
+      cp -a /opt/pangolin/config/db/db.sqlite \
+        "/opt/pangolin/config/db/db.sqlite.pre-${PANGOLIN_VERSION}-$(date +%Y%m%d-%H%M%S).bak"
+    fi
     msg_ok "Created backup"
 
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "pangolin" "fosrl/pangolin" "tarball"
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "gerbil" "fosrl/gerbil" "singlefile" "latest" "/usr/bin" "gerbil_linux_amd64"
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "pangolin" "fosrl/pangolin" "tarball" "$PANGOLIN_VERSION"
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "gerbil" "fosrl/gerbil" "singlefile" "latest" "/usr/bin" "gerbil_linux_$(arch_resolve)"
 
     msg_info "Updating Pangolin"
     cd /opt/pangolin
@@ -67,36 +73,22 @@ function update_script() {
     rm -f /opt/pangolin_config_backup.tar.gz
     msg_ok "Restored config"
 
-    msg_info "Running database migrations"
-    cd /opt/pangolin
-
-    # Pre-apply potentially destructive schema changes safely so drizzle-kit
-    # does not recreate tables (which would delete all rows).
-    local DB="/opt/pangolin/config/db/db.sqlite"
-    if [[ -f "$DB" ]]; then
-      sqlite3 "$DB" "ALTER TABLE 'orgs' ADD COLUMN 'settingsLogRetentionDaysConnection' integer DEFAULT 0 NOT NULL;" 2>/dev/null || true
-      sqlite3 "$DB" "ALTER TABLE 'clientSitesAssociationsCache' ADD COLUMN 'isJitMode' integer DEFAULT 0 NOT NULL;" 2>/dev/null || true
-      sqlite3 "$DB" "ALTER TABLE 'userOrgs' ADD COLUMN 'pamUsername' text;" 2>/dev/null || true
-
-      # Create new role-mapping tables and migrate data before drizzle-kit
-      # drops the roleId columns from userOrgs and userInvites.
-      sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS 'userOrgRoles' (
-        'userId' text NOT NULL REFERENCES 'user'('id') ON DELETE CASCADE,
-        'orgId' text NOT NULL REFERENCES 'orgs'('orgId') ON DELETE CASCADE,
-        'roleId' integer NOT NULL REFERENCES 'roles'('roleId') ON DELETE CASCADE,
-        UNIQUE('userId', 'orgId', 'roleId')
-      );" 2>/dev/null || true
-      sqlite3 "$DB" "INSERT OR IGNORE INTO 'userOrgRoles' (userId, orgId, roleId) SELECT userId, orgId, roleId FROM 'userOrgs' WHERE roleId IS NOT NULL;" 2>/dev/null || true
-
-      sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS 'userInviteRoles' (
-        'inviteId' text NOT NULL REFERENCES 'userInvites'('inviteId') ON DELETE CASCADE,
-        'roleId' integer NOT NULL REFERENCES 'roles'('roleId') ON DELETE CASCADE,
-        PRIMARY KEY('inviteId', 'roleId')
-      );" 2>/dev/null || true
-      sqlite3 "$DB" "INSERT OR IGNORE INTO 'userInviteRoles' (inviteId, roleId) SELECT inviteId, roleId FROM 'userInvites' WHERE roleId IS NOT NULL;" 2>/dev/null || true
+    if ! grep -q '^ExecStartPre=/usr/bin/node dist/migrations.mjs' /etc/systemd/system/pangolin.service 2>/dev/null; then
+      msg_info "Adding migration step to pangolin.service"
+      sed -i '/^ExecStart=\/usr\/bin\/node --enable-source-maps dist\/server.mjs/i ExecStartPre=/usr/bin/node dist/migrations.mjs' /etc/systemd/system/pangolin.service
+      systemctl daemon-reload
+      msg_ok "Updated pangolin.service"
     fi
 
-    ENVIRONMENT=prod $STD npx drizzle-kit push --force --config drizzle.sqlite.config.ts
+    msg_info "Running database migrations"
+    cd /opt/pangolin
+    SQLITE_DB="/opt/pangolin/config/db/db.sqlite"
+    if [[ -f "$SQLITE_DB" ]]; then
+      if ! sqlite3 "$SQLITE_DB" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "statusHistory"; then
+        sqlite3 "$SQLITE_DB" "DELETE FROM versionMigrations;" 2>/dev/null || true
+      fi
+    fi
+    ENVIRONMENT=prod $STD node dist/migrations.mjs
     msg_ok "Ran database migrations"
 
     msg_info "Updating Badger plugin version"
@@ -119,5 +111,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}https://<YOUR_PANGOLIN_URL>${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}https://<YOUR_PANGOLIN_URL>${CL}"
