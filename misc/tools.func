@@ -36,6 +36,10 @@
 #
 # ==============================================================================
 
+# Guard against double-sourcing (core.func uses the same pattern)
+[[ -n "${_TOOLS_FUNC_LOADED:-}" ]] && return 0
+_TOOLS_FUNC_LOADED=1
+
 # ------------------------------------------------------------------------------
 # Debug helper - outputs to stderr when TOOLS_DEBUG is enabled
 # Usage: debug_log "message"
@@ -91,16 +95,17 @@ curl_with_retry() {
   while [[ $attempt -le $retries ]]; do
     debug_log "curl attempt $attempt/$retries: $url"
 
-    local curl_cmd="curl -fsSL --connect-timeout $connect_timeout --max-time $timeout"
-    [[ -n "$extra_opts" ]] && curl_cmd="$curl_cmd $extra_opts"
+    # Build curl command as array to avoid command injection via extra_opts
+    local -a curl_args=(curl -fsSL --connect-timeout "$connect_timeout" --max-time "$timeout")
+    [[ -n "$extra_opts" ]] && read -ra _extra <<<"$extra_opts" && curl_args+=("${_extra[@]}")
 
     if [[ "$output" == "-" ]]; then
-      if $curl_cmd "$url"; then
+      if "${curl_args[@]}" "$url"; then
         success=true
         break
       fi
     else
-      if $curl_cmd -o "$output" "$url"; then
+      if "${curl_args[@]}" -o "$output" "$url"; then
         success=true
         break
       fi
@@ -153,15 +158,16 @@ curl_api_with_retry() {
   while [[ $attempt -le $retries ]]; do
     debug_log "curl API attempt $attempt/$retries: $url"
 
-    local curl_cmd="curl -fsSL --connect-timeout $connect_timeout --max-time $timeout -w '%{http_code}'"
-    [[ -n "$extra_opts" ]] && curl_cmd="$curl_cmd $extra_opts"
+    # Build curl command as array to avoid command injection via extra_opts
+    local -a curl_args=(curl -fsSL --connect-timeout "$connect_timeout" --max-time "$timeout" -w '%{http_code}')
+    [[ -n "$extra_opts" ]] && read -ra _extra <<<"$extra_opts" && curl_args+=("${_extra[@]}")
 
     if [[ -n "$body_file" ]]; then
-      http_code=$($curl_cmd -o "$body_file" "$url" 2>/dev/null) || true
+      http_code=$("${curl_args[@]}" -o "$body_file" "$url" 2>/dev/null) || true
     else
       # Capture body and http_code separately
       local tmp_body="/tmp/curl_api_body_$$"
-      http_code=$($curl_cmd -o "$tmp_body" "$url" 2>/dev/null) || true
+      http_code=$("${curl_args[@]}" -o "$tmp_body" "$url" 2>/dev/null) || true
       if [[ -f "$tmp_body" ]]; then
         cat "$tmp_body"
         rm -f "$tmp_body"
@@ -304,7 +310,10 @@ edit_yaml_config() {
     return 1
   fi
 
-  sed -i "s|^\([[:space:]]*${key}[[:space:]]*:\).*|\1 ${value}|" "$file"
+  # Escape sed metacharacters in value (| and &) to prevent injection
+  local escaped_value="${value//|/\\|}"
+  escaped_value="${escaped_value//&/\\&}"
+  sed -i "s|^\([[:space:]]*${key}[[:space:]]*:\).*|\1 ${escaped_value}|" "$file"
 }
 
 # ------------------------------------------------------------------------------
@@ -1687,10 +1696,6 @@ is_ubuntu() {
   [[ "$(get_os_info id)" == "ubuntu" ]]
 }
 
-is_alpine() {
-  [[ "$(get_os_info id)" == "alpine" ]]
-}
-
 # ------------------------------------------------------------------------------
 # Get Debian/Ubuntu major version
 # ------------------------------------------------------------------------------
@@ -2454,8 +2459,10 @@ start_timer() {
 end_timer() {
   local start_time="$1"
   local label="${2:-Operation}"
-  local end_time=$(date +%s)
+  local end_time
+  end_time=$(date +%s)
   local duration=$((end_time - start_time))
+  echo "${label} took ${duration}s"
 }
 
 # ------------------------------------------------------------------------------
@@ -2560,6 +2567,199 @@ fetch_and_deploy_gh_tag() {
 }
 
 # ------------------------------------------------------------------------------
+# Get the latest GitLab repository tag matching a glob pattern.
+#
+# Description:
+#   - Queries the GitLab repository tags API (up to 100 tags per page)
+#   - Filters tag names against a shell glob pattern (e.g. "web-v*" or "mobile-v*")
+#   - Always excludes pre-release tags (those containing alpha, beta, or rc)
+#   - Sorts matching tags with `sort -V` and returns the highest one
+#   - Supports GITLAB_TOKEN for private/rate-limited projects
+#
+# Usage:
+#     get_latest_gl_tag "owner/repo" "web-v*"
+#     get_latest_gl_tag "owner/repo" "mobile-v*"
+#     get_latest_gl_tag "owner/repo"          # returns newest tag (no filter)
+#
+# Arguments:
+#   $1 - GitLab repo path (namespace/project, e.g. "mygroup/myapp")
+#   $2 - Optional glob pattern to filter tag names (e.g. "web-v*")
+#
+# Returns:
+#   Latest matching tag name on stdout, or non-zero on failure
+# ------------------------------------------------------------------------------
+get_latest_gl_tag() {
+  local repo="$1"
+  local pattern="${2:-}"
+
+  local repo_encoded
+  repo_encoded=$(printf '%s' "$repo" | sed 's|/|%2F|g')
+
+  local api_base="https://gitlab.com/api/v4/projects/${repo_encoded}/repository/tags"
+  local api_timeout="--connect-timeout 10 --max-time 60"
+
+  local header=()
+  [[ -n "${GITLAB_TOKEN:-}" ]] && header=(-H "PRIVATE-TOKEN: $GITLAB_TOKEN")
+
+  # If a pattern is given, pass it as a regex search to reduce server-side results.
+  # GitLab ?search= supports anchored regex; convert leading glob prefix to regex anchor.
+  local search_param=""
+  if [[ -n "$pattern" ]]; then
+    # Strip trailing wildcard for the search hint (server-side prefix filter).
+    local prefix="${pattern%%\**}"
+    [[ -n "$prefix" ]] && search_param="?search=^${prefix}&per_page=100" || search_param="?per_page=100"
+  else
+    search_param="?per_page=100"
+  fi
+
+  local temp_file
+  temp_file=$(mktemp) || return 1
+
+  local http_code
+  http_code=$(curl $api_timeout -sSL -w "%{http_code}" -o "$temp_file" \
+    "${header[@]}" "${api_base}${search_param}" 2>/dev/null) || true
+
+  if [[ "$http_code" != "200" ]]; then
+    rm -f "$temp_file"
+    msg_error "GitLab tags API returned HTTP $http_code for $repo"
+    return 22
+  fi
+
+  local tag=""
+  if [[ -n "$pattern" ]]; then
+    # Client-side glob filter + pre-release exclusion, then version-sort to pick the highest match.
+    tag=$(jq -r '.[].name' "$temp_file" 2>/dev/null | while IFS= read -r t; do
+      case "$t" in
+      *alpha* | *beta* | *rc*) continue ;;
+      $pattern) echo "$t" ;;
+      esac
+    done | sort -V | tail -n1)
+  else
+    # No pattern: skip pre-release tags, take the first remaining (newest) one.
+    tag=$(jq -r '.[].name' "$temp_file" 2>/dev/null |
+      grep -Eiv '(alpha|beta|rc)' |
+      head -n1)
+  fi
+
+  rm -f "$temp_file"
+
+  if [[ -z "$tag" ]]; then
+    msg_error "No tags matching '${pattern:-*}' found for ${repo}"
+    return 250
+  fi
+
+  echo "$tag"
+}
+
+# ------------------------------------------------------------------------------
+# Fetches and deploys a GitLab tag-based source tarball.
+#
+# Description:
+#   - Resolves the latest tag matching the given glob pattern via get_latest_gl_tag
+#     (or uses the exact tag if one is provided instead of "latest")
+#   - Downloads the GitLab source tarball for that tag
+#   - Extracts it to the target directory
+#   - Writes the resolved tag to ~/.<app> for update-checking
+#
+# Usage:
+#     fetch_and_deploy_gl_tag "myapp" "mygroup/myrepo" "web-v*"
+#     fetch_and_deploy_gl_tag "myapp" "mygroup/myrepo" "mobile-v*" "/opt/myapp"
+#     fetch_and_deploy_gl_tag "myapp" "mygroup/myrepo" "v*"          # any v-tag
+#     fetch_and_deploy_gl_tag "myapp" "mygroup/myrepo" "web-v3.0*"   # narrow version range
+#
+# Arguments:
+#   $1 - App name (used for version file ~/.<app> and lowercase tarball name)
+#   $2 - GitLab repo path (namespace/project, e.g. "mygroup/myapp")
+#   $3 - Tag pattern: glob (e.g. "web-v*") or exact tag (e.g. "web-v3.0.0").
+#        Use "latest" to fetch the single newest tag with no pattern filter.
+#   $4 - Target directory (default: /opt/$app)
+#
+# Notes:
+#   - Supports CLEAN_INSTALL=1 to wipe target before extracting
+#   - Supports GITLAB_TOKEN for private/rate-limited projects
+#   - For repos that only publish tags, not formal GitLab Releases
+#     (use fetch_and_deploy_gl_release for proper Releases with assets)
+# ------------------------------------------------------------------------------
+fetch_and_deploy_gl_tag() {
+  local app="$1"
+  local repo="$2"
+  local tag_pattern="${3:-latest}"
+  local target="${4:-/opt/$app}"
+
+  local app_lc=""
+  app_lc="$(echo "${app,,}" | tr -d ' ')"
+  local version_file="$HOME/.${app_lc}"
+
+  local api_timeout="--connect-timeout 10 --max-time 60"
+  local download_timeout="--connect-timeout 15 --max-time 900"
+
+  local header=()
+  [[ -n "${GITLAB_TOKEN:-}" ]] && header=(-H "PRIVATE-TOKEN: $GITLAB_TOKEN")
+
+  # Resolve the tag: if caller passed a glob/latest, query the API.
+  # If caller passed an exact tag (no wildcards), use it directly.
+  local resolved_tag="$tag_pattern"
+  if [[ "$tag_pattern" == "latest" || "$tag_pattern" == *"*"* || "$tag_pattern" == *"?"* ]]; then
+    local glob_arg=""
+    [[ "$tag_pattern" != "latest" ]] && glob_arg="$tag_pattern"
+    resolved_tag=$(get_latest_gl_tag "$repo" "$glob_arg") || {
+      msg_error "Failed to determine latest tag matching '${tag_pattern}' for ${repo}"
+      return 250
+    }
+  fi
+
+  local current_version=""
+  [[ -f "$version_file" ]] && current_version=$(<"$version_file")
+
+  if [[ "$current_version" == "$resolved_tag" ]]; then
+    msg_ok "$app is already up-to-date ($resolved_tag)"
+    return 0
+  fi
+
+  local repo_encoded
+  repo_encoded=$(printf '%s' "$repo" | sed 's|/|%2F|g')
+
+  # GitLab source tarball URL (no release needed, works for any tag).
+  local version_safe="${resolved_tag//\//-}"
+  local tarball_url="https://gitlab.com/${repo}/-/archive/${resolved_tag}/${app_lc}-${version_safe}.tar.gz"
+
+  local tmpdir
+  tmpdir=$(mktemp -d) || return 1
+  local filename="${app_lc}-${version_safe}.tar.gz"
+
+  msg_info "Fetching GitLab tag: ${app} (${resolved_tag})"
+
+  curl $download_timeout -fsSL "${header[@]}" -o "$tmpdir/$filename" "$tarball_url" || {
+    msg_error "Download failed: $tarball_url"
+    rm -rf "$tmpdir"
+    return 7
+  }
+
+  mkdir -p "$target"
+  if [[ "${CLEAN_INSTALL:-0}" == "1" ]]; then
+    rm -rf "${target:?}/"*
+  fi
+
+  tar --no-same-owner -xzf "$tmpdir/$filename" -C "$tmpdir" || {
+    msg_error "Failed to extract tarball"
+    rm -rf "$tmpdir"
+    return 251
+  }
+
+  local unpack_dir
+  unpack_dir=$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -n1)
+
+  shopt -s dotglob nullglob
+  cp -r "$unpack_dir"/* "$target/"
+  shopt -u dotglob nullglob
+
+  rm -rf "$tmpdir"
+  echo "$resolved_tag" >"$version_file"
+  msg_ok "Deployed ${app} ${resolved_tag} to ${target}"
+  return 0
+}
+
+# ------------------------------------------------------------------------------
 # Checks for new GitHub tag (for repos without releases).
 #
 # Description:
@@ -2633,6 +2833,7 @@ check_for_gh_release() {
   local source="$2"
   local pinned_version_in="${3:-}" # optional
   local pin_reason="${4:-}"        # optional reason shown to user
+  local tag_prefix="${5:-}"        # optional tag prefix filter (e.g. web-v2)
   local app_lc=""
   app_lc="$(echo "${app,,}" | tr -d ' ')"
   local current_file="$HOME/.${app_lc}"
@@ -2688,7 +2889,7 @@ check_for_gh_release() {
     rm -f "$gh_check_json"
   fi
 
-  if [[ -z "$pinned_version_in" ]]; then
+  if [[ -z "$pinned_version_in" && -z "$tag_prefix" ]]; then
     http_code=$(curl -sSL --max-time 20 -w "%{http_code}" -o "$gh_check_json" \
       -H 'Accept: application/vnd.github+json' \
       -H 'X-GitHub-Api-Version: 2022-11-28' \
@@ -2716,7 +2917,7 @@ check_for_gh_release() {
     rm -f "$gh_check_json"
   fi
 
-  # If no releases yet (pinned version OR /latest failed), fetch up to 100
+  # If no releases yet (pinned version, tag prefix, OR /latest failed), fetch up to 100
   if [[ -z "$releases_json" ]]; then
     http_code=$(curl -sSL --max-time 20 -w "%{http_code}" -o "$gh_check_json" \
       -H 'Accept: application/vnd.github+json' \
@@ -2754,9 +2955,18 @@ check_for_gh_release() {
     rm -f "$gh_check_json"
   fi
 
-  mapfile -t raw_tags < <(jq -r '.[] | select(.draft==false and .prerelease==false) | .tag_name' <<<"$releases_json")
+  if [[ -n "$tag_prefix" ]]; then
+    mapfile -t raw_tags < <(jq -r --arg p "$tag_prefix" \
+      '.[] | select(.draft==false and .prerelease==false) | select(.tag_name | startswith($p)) | .tag_name' <<<"$releases_json")
+  else
+    mapfile -t raw_tags < <(jq -r '.[] | select(.draft==false and .prerelease==false) | .tag_name' <<<"$releases_json")
+  fi
   if ((${#raw_tags[@]} == 0)); then
-    msg_error "No stable releases found for ${app}"
+    if [[ -n "$tag_prefix" ]]; then
+      msg_error "No stable releases matching prefix '${tag_prefix}' found for ${app}"
+    else
+      msg_error "No stable releases found for ${app}"
+    fi
     return 250
   fi
 
@@ -3760,6 +3970,7 @@ fetch_and_deploy_gh_release() {
   local version="${var_appversion:-${4:-latest}}"
   local target="${5:-/opt/$app}"
   local asset_pattern="${6:-}"
+  local tag_prefix="${7:-}"
 
   # Validate app name to prevent /root/. directory issues
   if [[ -z "$app" ]]; then
@@ -3789,7 +4000,13 @@ fetch_and_deploy_gh_release() {
   TOOLS_GH_REL_JSON="$gh_rel_json"
 
   local api_url="https://api.github.com/repos/$repo/releases"
-  [[ "$version" != "latest" ]] && api_url="$api_url/tags/$version" || api_url="$api_url/latest"
+  if [[ "$version" != "latest" ]]; then
+    api_url="$api_url/tags/$version"
+  elif [[ -n "$tag_prefix" ]]; then
+    api_url="$api_url?per_page=100"
+  else
+    api_url="$api_url/latest"
+  fi
   local header=()
   [[ -n "${GITHUB_TOKEN:-}" ]] && header=(-H "Authorization: token $GITHUB_TOKEN")
 
@@ -3852,6 +4069,14 @@ fetch_and_deploy_gh_release() {
 
   local json tag_name
   json=$(<"$gh_rel_json")
+  if [[ "$version" == "latest" && -n "$tag_prefix" ]]; then
+    json=$(echo "$json" | jq --arg p "$tag_prefix" \
+      '[.[] | select(.draft==false and .prerelease==false) | select(.tag_name | startswith($p))][0] // empty')
+    if [[ -z "$json" || "$json" == "null" ]]; then
+      msg_error "No stable release matching prefix '${tag_prefix}' found for $repo on GitHub"
+      return 1
+    fi
+  fi
   tag_name=$(echo "$json" | jq -r '.tag_name // .name // empty')
   # Only strip leading 'v' when followed by a digit (e.g. v1.2.3), not words like "version/..."
   [[ "$tag_name" =~ ^v[0-9] ]] && version="${tag_name:1}" || version="$tag_name"
@@ -4438,20 +4663,20 @@ setup_composer() {
 #   - Cleans up legacy repository files
 #
 # Usage:
-#   setup_docker                              # Uses distro package (recommended)
-#   USE_DOCKER_REPO=true setup_docker         # Uses official Docker repo
+#   setup_docker                              # Uses official Docker repo (recommended)
+#   USE_DOCKER_REPO=false setup_docker        # Uses distro docker.io package
 #   DOCKER_PORTAINER="true" setup_docker
 #   DOCKER_LOG_DRIVER="json-file" setup_docker
 #
 # Variables:
-#   USE_DOCKER_REPO        - Set to "true" to use official Docker repository
-#                            (default: false, uses distro docker.io package)
+#   USE_DOCKER_REPO        - Set to "false" to use distro docker.io package
+#                            (default: true, uses official Docker repository)
 #   DOCKER_PORTAINER       - Install Portainer CE (optional, "true" to enable)
 #   DOCKER_LOG_DRIVER      - Log driver (optional, default: "journald")
 #   DOCKER_SKIP_UPDATES    - Skip container update check (optional, "true" to skip)
 #
 # Features:
-#   - Uses stable distro packages by default
+#   - Uses official Docker repository by default
 #   - Migrates from get.docker.com to repository-based installation
 #   - Updates Docker Engine if newer version available
 #   - Interactive per-container update prompt (Y/N, 60 s auto-no)
@@ -4467,7 +4692,7 @@ _docker_is_noninteractive() {
 setup_docker() {
   local docker_installed=false
   local portainer_installed=false
-  local USE_DOCKER_REPO="${USE_DOCKER_REPO:-false}"
+  local USE_DOCKER_REPO="${USE_DOCKER_REPO:-true}"
 
   # Check if Docker is already installed
   if command -v docker &>/dev/null; then
@@ -4482,7 +4707,7 @@ setup_docker() {
     msg_info "Portainer container detected"
   fi
 
-  # Scenario 1: Use distro repository (default, most stable)
+  # Scenario 1: Use distro repository (opt-out via USE_DOCKER_REPO=false)
   if [[ "$USE_DOCKER_REPO" != "true" && "$USE_DOCKER_REPO" != "TRUE" && "$USE_DOCKER_REPO" != "1" ]]; then
 
     # Install or upgrade Docker from distro repo
@@ -6746,9 +6971,11 @@ setup_mariadb_db() {
 
   msg_info "Setting up MariaDB Database"
 
-  $STD mariadb -u root -e "CREATE DATABASE \`$MARIADB_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-  $STD mariadb -u root -e "CREATE USER '$MARIADB_DB_USER'@'localhost' IDENTIFIED BY '$MARIADB_DB_PASS';"
-  $STD mariadb -u root -e "GRANT ALL ON \`$MARIADB_DB_NAME\`.* TO '$MARIADB_DB_USER'@'localhost';"
+  # Use --defaults-extra-file to pass credentials safely and escape identifiers
+  # to prevent SQL injection via DB name / user / password
+  $STD mariadb -u root -e "CREATE DATABASE \`${MARIADB_DB_NAME//\`/\`\`}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  $STD mariadb -u root -e "CREATE USER '${MARIADB_DB_USER//\'/\'\'}'@'localhost' IDENTIFIED BY '${MARIADB_DB_PASS//\'/\'\'}';"
+  $STD mariadb -u root -e "GRANT ALL ON \`${MARIADB_DB_NAME//\`/\`\`}\`.* TO '${MARIADB_DB_USER//\'/\'\'}'@'localhost';"
 
   # Optional extra grants
   if [[ -n "${MARIADB_DB_EXTRA_GRANTS:-}" ]]; then
@@ -8378,8 +8605,14 @@ setup_postgresql_db() {
   fi
 
   msg_info "Setting up PostgreSQL Database"
-  $STD sudo -u postgres psql -c "CREATE ROLE $PG_DB_USER WITH LOGIN PASSWORD '$PG_DB_PASS';"
-  $STD sudo -u postgres psql -c "CREATE DATABASE $PG_DB_NAME WITH OWNER $PG_DB_USER ENCODING 'UTF8' TEMPLATE template0;"
+  # Escape single quotes in identifiers to prevent SQL injection
+  local _pg_user_escaped _pg_pass_escaped _pg_db_escaped
+  _pg_user_escaped="${PG_DB_USER//\'/\'\'}"
+  _pg_pass_escaped="${PG_DB_PASS//\'/\'\'}"
+  _pg_db_escaped="${PG_DB_NAME//\'/\'\'}"
+
+  $STD sudo -u postgres psql -c "CREATE ROLE $_pg_user_escaped WITH LOGIN PASSWORD '$_pg_pass_escaped';"
+  $STD sudo -u postgres psql -c "CREATE DATABASE $_pg_db_escaped WITH OWNER $_pg_user_escaped ENCODING 'UTF8' TEMPLATE template0;"
 
   # Configure pg_cron database BEFORE creating the extension (must be set before pg_cron loads)
   if [[ -n "${PG_DB_EXTENSIONS:-}" ]] && [[ ",${PG_DB_EXTENSIONS//[[:space:]]/}," == *",pg_cron,"* ]]; then
@@ -9276,6 +9509,7 @@ check_for_gl_release() {
   local source="$2"
   local pinned_version_in="${3:-}" # optional
   local pin_reason="${4:-}"        # optional reason shown to user
+  local tag_prefix="${5:-}"        # optional tag prefix filter (e.g. web-v2)
   local app_lc="${app,,}"
   local current_file="$HOME/.${app_lc}"
 
@@ -9352,9 +9586,18 @@ check_for_gl_release() {
     rm -f "$gl_check_json"
   fi
 
-  mapfile -t raw_tags < <(jq -r '.[] | .tag_name' <<<"$releases_json")
+  if [[ -n "$tag_prefix" ]]; then
+    mapfile -t raw_tags < <(jq -r --arg p "$tag_prefix" \
+      '.[] | select(.tag_name | startswith($p)) | .tag_name' <<<"$releases_json")
+  else
+    mapfile -t raw_tags < <(jq -r '.[] | .tag_name' <<<"$releases_json")
+  fi
   if ((${#raw_tags[@]} == 0)); then
-    msg_error "No releases found for ${app} on GitLab"
+    if [[ -n "$tag_prefix" ]]; then
+      msg_error "No releases matching prefix '${tag_prefix}' found for ${app} on GitLab"
+    else
+      msg_error "No releases found for ${app} on GitLab"
+    fi
     return 250
   fi
 
@@ -9549,6 +9792,7 @@ fetch_and_deploy_gl_release() {
   local version="${var_appversion:-${4:-latest}}"
   local target="${5:-/opt/$app}"
   local asset_pattern="${6:-}"
+  local tag_prefix="${7:-}"
 
   if [[ -z "$app" ]]; then
     app="${repo##*/}"
@@ -9580,6 +9824,8 @@ fetch_and_deploy_gl_release() {
   local api_url
   if [[ "$version" != "latest" ]]; then
     api_url="$api_base/$version"
+  elif [[ -n "$tag_prefix" ]]; then
+    api_url="$api_base?per_page=100&order_by=released_at&sort=desc"
   else
     api_url="$api_base?per_page=1&order_by=released_at&sort=desc"
   fi
@@ -9634,9 +9880,18 @@ fetch_and_deploy_gl_release() {
   json=$(<"$gl_rel_json")
 
   if [[ "$version" == "latest" ]]; then
-    json=$(echo "$json" | jq '.[0] // empty')
+    if [[ -n "$tag_prefix" ]]; then
+      json=$(echo "$json" | jq --arg p "$tag_prefix" \
+        '[.[] | select(.tag_name | startswith($p))][0] // empty')
+    else
+      json=$(echo "$json" | jq '.[0] // empty')
+    fi
     if [[ -z "$json" || "$json" == "null" ]]; then
-      msg_error "No releases found for $repo on GitLab"
+      if [[ -n "$tag_prefix" ]]; then
+        msg_error "No release matching prefix '${tag_prefix}' found for $repo on GitLab"
+      else
+        msg_error "No releases found for $repo on GitLab"
+      fi
       return 1
     fi
   fi
