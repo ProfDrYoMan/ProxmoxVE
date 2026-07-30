@@ -508,6 +508,91 @@ Exercise vigilance regarding copycat or coat-tailing sites that seek to exploit 
 
 </details>
 
+## 2026-07-30
+
+### 🆕 New Scripts
+
+  - Firecrawl ([#16156](https://github.com/community-scripts/ProxmoxVE/pull/16156))
+- OmniRoute ([#16155](https://github.com/community-scripts/ProxmoxVE/pull/16155))
+- PegaProx ([#16154](https://github.com/community-scripts/ProxmoxVE/pull/16154))
+
+### 🚀 Updated Scripts
+
+  - #### 🐞 Bug Fixes
+
+    - Immich: Pin version to 3.1.0 [@vhsdream](https://github.com/vhsdream) ([#16170](https://github.com/community-scripts/ProxmoxVE/pull/16170))
+    - romm: remove stale 1.x alembic migrations on update [@Darkatek7](https://github.com/Darkatek7) ([#16101](https://github.com/community-scripts/ProxmoxVE/pull/16101))
+
+  - #### 🔧 Refactor
+
+    - Medusa: convert the non-free unrar source to deb822 format [@angusmaul](https://github.com/angusmaul) ([#16093](https://github.com/community-scripts/ProxmoxVE/pull/16093))
+
+### 💾 Core
+
+  - #### ✨ New Features
+
+    - tools.func: support dynamic gitlab URL | add setup_mysql_db function [@MickLesk](https://github.com/MickLesk) ([#16166](https://github.com/community-scripts/ProxmoxVE/pull/16166))
+    - core: add configurable host CA inheritance during bootstrap [@MickLesk](https://github.com/MickLesk) ([#15889](https://github.com/community-scripts/ProxmoxVE/pull/15889))
+
+## 2026-07-29
+
+### 🚀 Updated Scripts
+
+  - #### 🐞 Bug Fixes
+
+    - backup virtual printer in bambuddy [@asylumexp](https://github.com/asylumexp) ([#16142](https://github.com/community-scripts/ProxmoxVE/pull/16142))
+    - ImmichFrame: check .NET SDK before update deployment [@aidaskni](https://github.com/aidaskni) ([#16104](https://github.com/community-scripts/ProxmoxVE/pull/16104))
+
+  - #### ✨ New Features
+
+    - Bichon: Migration for V2 Release [@MickLesk](https://github.com/MickLesk) ([#16145](https://github.com/community-scripts/ProxmoxVE/pull/16145))
+
+### 💾 Core
+
+  - #### ✨ New Features
+
+    - core: Harden remote func bootstrapping with dns issues [@MickLesk](https://github.com/MickLesk) ([#16146](https://github.com/community-scripts/ProxmoxVE/pull/16146))
+
+## 2026-07-28
+
+### 🚀 Updated Scripts
+
+  - #### 🐞 Bug Fixes
+
+    - Create search directory in wanderer-install.sh [@Isnubi](https://github.com/Isnubi) ([#16134](https://github.com/community-scripts/ProxmoxVE/pull/16134))
+    - npmplus: Remove duplicate msg_info for container recreation [@MickLesk](https://github.com/MickLesk) ([#16122](https://github.com/community-scripts/ProxmoxVE/pull/16122))
+    - fix Node.js version drift [@asylumexp](https://github.com/asylumexp) ([#16111](https://github.com/community-scripts/ProxmoxVE/pull/16111))
+    - UmlautAdaptarr: use the Debian 13 Microsoft repo with its 2025 signing key [@angusmaul](https://github.com/angusmaul) ([#16077](https://github.com/community-scripts/ProxmoxVE/pull/16077))
+    - fix(bazarr): store data in /var/lib/bazarr instead of inside /opt/bazarr [@angusmaul](https://github.com/angusmaul) ([#16098](https://github.com/community-scripts/ProxmoxVE/pull/16098))
+    - Cloudflare-DDNS: store API token in a 600 env file and build the binary at install time [@angusmaul](https://github.com/angusmaul) ([#16100](https://github.com/community-scripts/ProxmoxVE/pull/16100))
+
+  - #### ✨ New Features
+
+    - tools.func:  add nginx site helper and PHP socket resolver  [@MickLesk](https://github.com/MickLesk) ([#16118](https://github.com/community-scripts/ProxmoxVE/pull/16118))
+
+  - #### 💥 Breaking Changes
+
+    - Migrate Musicseerr to DroppedNeedle [@vhsdream](https://github.com/vhsdream) ([#15751](https://github.com/community-scripts/ProxmoxVE/pull/15751))
+
+### 💾 Core
+
+  - #### 🐞 Bug Fixes
+
+    - core: fix read prompt input directly from /dev/tty [@MickLesk](https://github.com/MickLesk) ([#16126](https://github.com/community-scripts/ProxmoxVE/pull/16126))
+
+### 🧰 Tools
+
+  - actual-budget-prometheus-exporter ([#16109](https://github.com/community-scripts/ProxmoxVE/pull/16109))
+
+  - #### 🐞 Bug Fixes
+
+    - fix: prometheus-paperless-exporter incompatibility with paperless v3 [@CrazyWolf13](https://github.com/CrazyWolf13) ([#16119](https://github.com/community-scripts/ProxmoxVE/pull/16119))
+
+### 📂 Github
+
+  - fix keep-open for close invalid pr [@asylumexp](https://github.com/asylumexp) ([#16105](https://github.com/community-scripts/ProxmoxVE/pull/16105))
+- Bump GitHub Actions across workflows  [@MickLesk](https://github.com/MickLesk) ([#16091](https://github.com/community-scripts/ProxmoxVE/pull/16091))
+
 ## 2026-07-27
 
 ### 🆕 New Scripts

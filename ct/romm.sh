@@ -44,6 +44,10 @@ function update_script() {
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "romm" "rommapp/romm" "tarball" "latest" "/opt/romm"
 
+    find /opt/romm/backend/alembic/versions -maxdepth 1 -type f -name '1.*.py' -delete 2>/dev/null || true
+    find /opt/romm/backend/alembic/versions -maxdepth 1 -type f -name '2.0.0_.py' -delete 2>/dev/null || true
+    find /opt/romm/backend -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
     restore_backup
 
     msg_info "Updating ROMM"
@@ -75,7 +79,7 @@ function update_script() {
       systemctl reload angie
     elif [[ -f /etc/nginx/sites-available/romm ]]; then
       sed -i "s|alias .*/library/;|alias ${ROMM_BASE}/library/;|" /etc/nginx/sites-available/romm
-      systemctl reload nginx
+      nginx_enable_site romm
     fi
     msg_ok "Updated ROMM"
 
